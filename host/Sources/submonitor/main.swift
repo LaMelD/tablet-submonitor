@@ -32,12 +32,16 @@ do {
         print("오류: 가상 디스플레이가 활성 디스플레이 목록에 나타나지 않습니다")
         exit(1)
     }
-    let runner = FFmpegRunner(arguments: ffmpegArguments(screenDevice: device, fps: 120, bitrate: "40M", port: 28100)) { tail in
+    let videoSocket = FileManager.default.temporaryDirectory.appendingPathComponent("submonitor-video.sock").path
+    let runner = FFmpegRunner(
+        arguments: ffmpegArguments(screenDevice: device, fps: 120, bitrate: "40M", socketPath: videoSocket),
+        socketPath: videoSocket
+    ) { tail in
         print("오류: FFmpeg가 연달아 바로 종료되었습니다.\n\(tail)\n\(permissionHint)")
         exit(1)
     }
     runner.start()
-    print("영상 송출 대기: tcp://127.0.0.1:28100 (\(device))")
+    print("영상 송출 대기: unix:\(videoSocket) (\(device))")
 
     let signals = [SIGINT, SIGTERM].map { sig -> DispatchSourceSignal in
         signal(sig, SIG_IGN)

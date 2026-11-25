@@ -8,12 +8,14 @@ final class CaptureTests: XCTestCase {
     }
 
     func testFFmpegArgumentsPinLatencyCriticalOptions() {
-        let a = ffmpegArguments(screenDevice: "Capture screen 1", fps: 120, bitrate: "40M", port: 28100)
+        let a = ffmpegArguments(screenDevice: "Capture screen 1", fps: 120, bitrate: "40M", socketPath: "/tmp/u/video.sock")
         assertPair(a, "-f", "avfoundation"); assertPair(a, "-capture_cursor", "0")
         assertPair(a, "-framerate", "120"); assertPair(a, "-i", "Capture screen 1:none")
         assertPair(a, "-c:v", "hevc_videotoolbox"); assertPair(a, "-realtime", "1"); assertPair(a, "-bf", "0")
         assertPair(a, "-b:v", "40M"); assertPair(a, "-flush_packets", "1"); assertPair(a, "-f", "flv")
-        XCTAssertEqual(a.last, "tcp://127.0.0.1:28100?listen=1&tcp_nodelay=1")
+        // 보안: 다른 프로세스가 화면을 받아가지 못하게 사용자 전용 디렉터리의 유닉스 소켓으로만 송출한다
+        assertPair(a, "-listen", "1")
+        XCTAssertEqual(a.last, "unix:/tmp/u/video.sock")
     }
 
     // Review Focus 4: 권한이 없어 FFmpeg가 바로 죽으면 무한 재시작하지 않는다

@@ -5,14 +5,15 @@ public func screenDeviceName(for displayID: UInt32, activeDisplays: [UInt32]) ->
     activeDisplays.firstIndex(of: displayID).map { "Capture screen \($0)" }
 }
 
-public func ffmpegArguments(screenDevice: String, fps: Int, bitrate: String, port: UInt16) -> [String] {
+/// 송출은 사용자 전용 디렉터리($TMPDIR, 0700)의 유닉스 소켓으로만 한다. TCP로 열면 화면 기록 권한 없는 로컬 프로세스도 화면을 받아갈 수 있다.
+public func ffmpegArguments(screenDevice: String, fps: Int, bitrate: String, socketPath: String) -> [String] {
     [
         "-hide_banner", "-loglevel", "warning",
         "-f", "avfoundation", "-capture_cursor", "0", "-framerate", "\(fps)", "-pixel_format", "nv12",
         "-i", "\(screenDevice):none",
         "-c:v", "hevc_videotoolbox", "-realtime", "1", "-prio_speed", "1", "-bf", "0",
         "-g", "\(fps * 10)", "-b:v", bitrate,
-        "-flush_packets", "1", "-f", "flv", "tcp://127.0.0.1:\(port)?listen=1&tcp_nodelay=1",
+        "-flush_packets", "1", "-f", "flv", "-listen", "1", "unix:\(socketPath)",
     ]
 }
 

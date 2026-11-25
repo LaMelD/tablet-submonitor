@@ -4,6 +4,7 @@ import SubmonitorCore
 /// FFmpeg를 하위 프로세스로 돌린다. 종료되면 RestartPolicy에 따라 다시 띄우거나 포기한다.
 final class FFmpegRunner {
     private let arguments: [String]
+    private let socketPath: String
     private let onGiveUp: (_ stderrTail: String) -> Void
     private let queue = DispatchQueue(label: "submonitor.ffmpeg")
     private var policy = RestartPolicy()
@@ -11,8 +12,9 @@ final class FFmpegRunner {
     private var stopping = false
     private var stderrTail: [String] = []
 
-    init(arguments: [String], onGiveUp: @escaping (_ stderrTail: String) -> Void) {
+    init(arguments: [String], socketPath: String, onGiveUp: @escaping (_ stderrTail: String) -> Void) {
         self.arguments = arguments
+        self.socketPath = socketPath
         self.onGiveUp = onGiveUp
     }
 
@@ -28,6 +30,7 @@ final class FFmpegRunner {
 
     private func launch() {
         guard !stopping else { return }
+        unlink(socketPath) // FFmpeg가 비정상 종료하면 소켓 파일이 남아 다음 listen이 실패한다
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         p.arguments = ["ffmpeg", "-nostdin"] + arguments
