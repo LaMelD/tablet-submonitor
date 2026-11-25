@@ -1,17 +1,21 @@
 package dev.submonitor
 
 import android.app.Activity
+import android.graphics.Color
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.os.Bundle
 import android.util.Log
+import android.view.Gravity
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.TextView
 import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.IOException
@@ -21,7 +25,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var root: FrameLayout
     private lateinit var surfaceView: SurfaceView
     private lateinit var cursorOverlay: CursorOverlay
+    private lateinit var status: TextView
     private var session: Session? = null
+
+    /** 영상이 끊긴 채 1.5초가 지나면 멈춘 화면 위에 띄운다. 앱 전환 뒤 재접속(약 0.8초)·첫 실행(약 1.3초)에 깜빡이지 않게 늦춘다. */
+    private val showDisconnected = Runnable { status.visibility = View.VISIBLE }
 
     /**
      * Surface 한 번의 수명. 스레드는 자기 세션의 플래그만 본다.
@@ -43,6 +51,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val match = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         root.addView(surfaceView, match)
         root.addView(cursorOverlay, FrameLayout.LayoutParams(match))
+        status = TextView(this).apply {
+            text = "연결 끊김 · 다시 연결을 기다리는 중"
+            textSize = 28f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(0xB0000000.toInt())
+            setPadding(48, 24, 48, 24)
+            visibility = View.GONE
+        }
+        val wrap = FrameLayout.LayoutParams.WRAP_CONTENT
+        root.addView(status, FrameLayout.LayoutParams(wrap, wrap, Gravity.CENTER))
         setContentView(root)
         surfaceView.holder.addCallback(this)
         hideSystemBars()
@@ -91,6 +109,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /** 연결 → 스트림 디코딩 → 끊기면 500ms 뒤 다시 연결. 화면이 사라지면(백그라운드 등) 끝난다. */
     private fun videoLoop(s: Session, surface: Surface) {
+        setStreaming(false)
         while (s.active.get()) {
             var decoder: VideoDecoder? = null
             try {
@@ -102,6 +121,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                             is FlvEvent.Config -> {
                                 decoder?.release()
                                 decoder = VideoDecoder(surface, VIDEO_WIDTH, VIDEO_HEIGHT).also { it.configure(e.csd) }
+                                setStreaming(true)
                             }
                             is FlvEvent.Frame -> decoder?.decode(e)
                         }
@@ -112,10 +132,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             } catch (e: RuntimeException) {
                 Log.w(TAG, "video stream error", e) // 앱을 죽이지 않고 다시 접속한다
             } finally {
+                // 끝난 세션(앱 전환 등)의 늦은 스레드가 새 세션의 표시를 건드리지 않게 active일 때만
+                if (decoder != null && s.active.get()) setStreaming(false)
                 decoder?.release()
             }
             if (s.active.get()) Thread.sleep(500)
         }
+    }
+
+    /** 스트림 상태를 화면에 반영한다. 받는 중이면 끊김 표시를 숨기고, 끊기면 1.5초 뒤 띄운다. */
+    private fun setStreaming(on: Boolean) = runOnUiThread {
+        root.removeCallbacks(showDisconnected)
+        if (on) status.visibility = View.GONE else root.postDelayed(showDisconnected, 1500)
     }
 
     /** 커서 채널. 영상과 같은 수명·재접속 방식. 끊기면 커서를 숨긴다. */
