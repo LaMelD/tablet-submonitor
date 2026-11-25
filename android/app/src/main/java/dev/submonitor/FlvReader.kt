@@ -67,14 +67,18 @@ class FlvReader(input: InputStream) {
     }
 
     private fun parseHvcc(b: ByteArray, off: Int): ByteArray {
+        need(b.size >= off + 23)
         lengthSize = (b[off + 21].toInt() and 3) + 1
         val out = ByteArrayOutputStream()
         var p = off + 23
         repeat(b[off + 22].toInt() and 0xFF) {
+            need(p + 3 <= b.size)
             p += 1 // NAL type
             val count = u16(b, p); p += 2
             repeat(count) {
+                need(p + 2 <= b.size)
                 val len = u16(b, p); p += 2
+                need(p + len <= b.size)
                 out.write(START); out.write(b, p, len); p += len
             }
         }
@@ -87,9 +91,15 @@ class FlvReader(input: InputStream) {
         while (p + lengthSize <= b.size) {
             var len = 0
             repeat(lengthSize) { len = (len shl 8) or (b[p++].toInt() and 0xFF) }
+            need(len >= 0 && p + len <= b.size)
             out.write(START); out.write(b, p, len); p += len
         }
         return out.toByteArray()
+    }
+
+    /** 잘못된 입력은 크래시가 아니라 IOException(연결 끊고 재접속)으로 처리한다. */
+    private fun need(ok: Boolean) {
+        if (!ok) throw IOException("잘못된 FLV 데이터")
     }
 
     private fun readU24() = (input.readUnsignedByte() shl 16) or (input.readUnsignedByte() shl 8) or input.readUnsignedByte()

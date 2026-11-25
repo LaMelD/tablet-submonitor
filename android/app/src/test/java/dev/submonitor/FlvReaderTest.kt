@@ -4,6 +4,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
 
 // sample.flv 생성 명령 (FFmpeg 9, 이 맥북의 hevc_videotoolbox):
 // ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=640x400:rate=30 -frames:v 3 -c:v hevc_videotoolbox -bf 0 -f flv android/app/src/test/resources/sample.flv
@@ -30,6 +31,20 @@ class FlvReaderTest {
     @Test fun skipsCompositionTimeForCodedFrames() {
         val frame = readFrames(flv(sequenceStart(lengthSize = 4), codedFrames(cts = 0x000102, nal(0x26, 0x01)))).single()
         assertArrayEquals(START + bytes(0x26, 0x01), frame.data)
+    }
+
+    // 보안: 잘못된 입력은 크래시(IndexOutOfBounds 등)가 아니라 IOException이어야 한다. 앱은 연결만 끊고 다시 접속한다.
+    @Test(expected = IOException::class) fun truncatedNalLengthIsIOException() {
+        readFrames(flv(sequenceStart(lengthSize = 4), bytes(0x93) + hvc1 + u32(100) + bytes(0x26, 0x01)))
+    }
+
+    @Test(expected = IOException::class) fun malformedHvccIsIOException() {
+        val hvcc = ByteArray(23).also { it[0] = 1; it[21] = 0xFF.toByte(); it[22] = 1 } // 배열 1개라면서 내용 없음
+        readFrames(flv(bytes(0x90) + hvc1 + hvcc))
+    }
+
+    @Test(expected = IOException::class) fun tooShortHvccIsIOException() {
+        readFrames(flv(bytes(0x90) + hvc1 + bytes(1, 2, 3)))
     }
 
     // --- 테스트용 FLV 조립 헬퍼 (Enhanced FLV: 첫 바이트 = 확장헤더 비트 | frameType<<4 | packetType, 이어서 fourcc) ---

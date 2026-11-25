@@ -1,6 +1,8 @@
 package dev.submonitor
 
 import android.app.Activity
+import android.net.LocalSocket
+import android.net.LocalSocketAddress
 import android.os.Bundle
 import android.util.Log
 import android.view.Surface
@@ -12,14 +14,12 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import java.io.BufferedInputStream
 import java.io.IOException
-import java.net.InetSocketAddress
-import java.net.Socket
 
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var root: FrameLayout
     private lateinit var surfaceView: SurfaceView
     @Volatile private var running = false
-    @Volatile private var videoSocket: Socket? = null
+    @Volatile private var videoSocket: LocalSocket? = null
     private var videoThread: Thread? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -66,7 +66,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         running = false
-        videoSocket?.close()
+        videoSocket?.closeNow()
         videoThread?.join(1000)
         videoThread = null
     }
@@ -76,10 +76,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         while (running) {
             var decoder: VideoDecoder? = null
             try {
-                Socket().use { s ->
+                connectAdb(VIDEO_SOCKET).use { s ->
                     videoSocket = s
-                    s.tcpNoDelay = true
-                    s.connect(InetSocketAddress("127.0.0.1", VIDEO_PORT), 1000)
                     val reader = FlvReader(BufferedInputStream(s.getInputStream(), 1 shl 16))
                     while (running) {
                         when (val e = reader.next() ?: break) {
@@ -93,6 +91,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 }
             } catch (e: IOException) {
                 Log.d(TAG, "video connection: ${e.message}")
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "video stream error", e) // 앱을 죽이지 않고 다시 접속한다
             } finally {
                 decoder?.release()
             }
@@ -100,9 +100,33 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
+    /**
+     * adb reverse가 만든 추상 네임스페이스 소켓에 접속한다. 상대가 adbd(shell uid)가 아니면 거부한다.
+     * 탭의 다른 앱이 같은 이름을 먼저 차지해 조작된 데이터를 보내는 것을 막는다.
+     */
+    private fun connectAdb(name: String): LocalSocket {
+        val s = LocalSocket()
+        try {
+            s.connect(LocalSocketAddress(name, LocalSocketAddress.Namespace.ABSTRACT))
+            val uid = s.peerCredentials.uid
+            if (uid != ADBD_UID) throw IOException("adbd가 아닌 상대(uid=$uid)라 연결을 거부함")
+            return s
+        } catch (e: IOException) {
+            s.close()
+            throw e
+        }
+    }
+
+    /** 다른 스레드에서 막혀 있는 read를 깨우고 닫는다. */
+    private fun LocalSocket.closeNow() {
+        try { shutdownInput() } catch (_: IOException) {}
+        try { close() } catch (_: IOException) {}
+    }
+
     private companion object {
         const val TAG = "submonitor"
-        const val VIDEO_PORT = 28100
+        const val ADBD_UID = 2000 // shell
+        const val VIDEO_SOCKET = "submonitor-video"
         const val VIDEO_WIDTH = 2960
         const val VIDEO_HEIGHT = 1848
     }
