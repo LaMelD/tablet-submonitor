@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>지연 측정 시계</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; }
+  body { display: grid; place-items: center; font: 700 22vw/1 ui-monospace, Menlo, monospace; }
+</style>
+</head>
+<body>
+<div id="t">00000</div>
+<script>
+  // 창 두 개로 열어 하나는 메인 화면, 하나는 탭 화면에 둔다. 두 화면을 한 장에 찍어 숫자 차이(ms)를 읽는다.
+  const el = document.getElementById("t");
+  (function tick() {
+    el.textContent = String(Date.now() % 100000).padStart(5, "0");
+    requestAnimationFrame(tick);
+  })();
+</script>
+</body>
+</html>
