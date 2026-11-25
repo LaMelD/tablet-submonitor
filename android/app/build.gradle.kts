@@ -9,7 +9,8 @@ android {
     defaultConfig {
         applicationId = "dev.submonitor"
         minSdk = 30
-        targetSdk = 36
+        // 36으로 올리면 Android 16 대화면에서 screenOrientation이 무시돼 세로일 때 영상이 찌그러진다(실기 확인)
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
     }

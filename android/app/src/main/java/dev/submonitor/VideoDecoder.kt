@@ -7,15 +7,14 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.view.Surface
+import java.io.IOException
 import java.nio.ByteBuffer
-import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 
 /** HEVC 저지연 디코더. 출력은 쌓지 않고 받는 즉시 Surface에 표시한다. 스트림 하나(Config 한 번)당 하나씩 만든다. */
 class VideoDecoder(private val surface: Surface, private val width: Int, private val height: Int) {
     private val thread = HandlerThread("submonitor-decoder").apply { start() }
-    private val freeInputs = ArrayBlockingQueue<Int>(64)
+    private val inputs = DecoderInputs()
     private val queuedAt = ConcurrentHashMap<Long, Long>() // ptsUs -> 투입 시각(ns)
     private var codec: MediaCodec? = null
 
@@ -41,7 +40,7 @@ class VideoDecoder(private val surface: Surface, private val width: Int, private
         Log.i(TAG, "decoder=${c.name} lowLatencySupported=$lowLatency")
         c.setCallback(object : MediaCodec.Callback() {
             override fun onInputBufferAvailable(codec: MediaCodec, index: Int) {
-                freeInputs.offer(index)
+                inputs.offer(index)
             }
 
             override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
@@ -55,6 +54,7 @@ class VideoDecoder(private val surface: Surface, private val width: Int, private
 
             override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
                 Log.e(TAG, "decoder error", e)
+                inputs.fail(e.diagnosticInfo ?: e.toString())
             }
 
             override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
@@ -66,19 +66,18 @@ class VideoDecoder(private val surface: Surface, private val width: Int, private
         codec = c
     }
 
+    /** 디코더가 오류 상태이거나 입력 버퍼가 제때 안 나오면 IOException(연결을 끊고 디코더를 새로 만든다). */
+    @Throws(IOException::class)
     fun decode(frame: FlvEvent.Frame) {
         val c = codec ?: return
-        val index = freeInputs.poll(1, TimeUnit.SECONDS) ?: run {
-            Log.w(TAG, "입력 버퍼가 없어 프레임을 버림")
-            return
-        }
+        val index = inputs.take()
         val ptsUs = frame.ptsMs * 1000
         try {
             c.getInputBuffer(index)!!.apply { clear(); put(frame.data) }
             queuedAt[ptsUs] = System.nanoTime()
             c.queueInputBuffer(index, 0, frame.data.size, ptsUs, if (frame.key) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
         } catch (e: IllegalStateException) {
-            Log.w(TAG, "decode 실패", e)
+            throw IOException("decode 실패", e)
         }
     }
 

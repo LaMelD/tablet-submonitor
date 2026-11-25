@@ -17,21 +17,31 @@ public func ffmpegArguments(screenDevice: String, fps: Int, bitrate: String, soc
     ]
 }
 
-public enum RestartDecision: Equatable { case restart, giveUp }
+public struct RestartDecision: Equatable {
+    public let delay: TimeInterval
+    /// 빠른 종료가 연속 reportAfter번째일 때 한 번만 true (오류를 사용자에게 보여줄 시점)
+    public let reportError: Bool
+}
 
-/// 짧게 죽는 일이 연달아 생기면(권한 없음 등) 포기한다. 오래 돈 뒤의 종료(탭 연결 끊김)는 정상 재시작.
+/// 빠른 종료(minHealthyRun 미만)가 이어지면 재시작 간격을 두 배씩 늘린다(최대 maxDelay). 포기하지 않는다:
+/// 탭 재접속이 잦은 것도 빠른 종료로 보이기 때문이다. 화면 기록 권한은 시작할 때 따로 확인한다.
 public struct RestartPolicy {
     let minHealthyRun: TimeInterval
-    let maxFastFailures: Int
+    let baseDelay: TimeInterval
+    let maxDelay: TimeInterval
+    let reportAfter: Int
     var fastFailures = 0
 
-    public init(minHealthyRun: TimeInterval = 2, maxFastFailures: Int = 3) {
+    public init(minHealthyRun: TimeInterval = 2, baseDelay: TimeInterval = 0.3, maxDelay: TimeInterval = 5, reportAfter: Int = 3) {
         self.minHealthyRun = minHealthyRun
-        self.maxFastFailures = maxFastFailures
+        self.baseDelay = baseDelay
+        self.maxDelay = maxDelay
+        self.reportAfter = reportAfter
     }
 
     public mutating func onExit(runDuration: TimeInterval) -> RestartDecision {
         fastFailures = runDuration < minHealthyRun ? fastFailures + 1 : 0
-        return fastFailures >= maxFastFailures ? .giveUp : .restart
+        let delay = fastFailures == 0 ? baseDelay : min(baseDelay * pow(2, Double(fastFailures - 1)), maxDelay)
+        return RestartDecision(delay: delay, reportError: fastFailures == reportAfter)
     }
 }

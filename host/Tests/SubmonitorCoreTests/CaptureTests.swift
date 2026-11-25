@@ -18,20 +18,25 @@ final class CaptureTests: XCTestCase {
         XCTAssertEqual(a.last, "unix:/tmp/u/video.sock")
     }
 
-    // Review Focus 4: 권한이 없어 FFmpeg가 바로 죽으면 무한 재시작하지 않는다
-    func testRestartPolicyGivesUpAfterThreeFastFailures() {
+    // 리뷰 Important: 빠른 종료가 이어져도 호스트를 끝내지 않는다(탭 재접속이 잦을 때 권한 문제로 오인했다).
+    // 대신 점점 늦게 재시도하고, 연속 3번째에 한 번만 오류를 보여준다. 권한은 시작할 때 따로 확인한다.
+    func testRestartPolicyBacksOffOnFastFailures() {
         var p = RestartPolicy()
-        XCTAssertEqual(p.onExit(runDuration: 0.5), .restart)
-        XCTAssertEqual(p.onExit(runDuration: 0.5), .restart)
-        XCTAssertEqual(p.onExit(runDuration: 0.5), .giveUp)
+        let delays = (0..<7).map { _ in p.onExit(runDuration: 0.5).delay }
+        for (got, want) in zip(delays, [0.3, 0.6, 1.2, 2.4, 4.8, 5, 5]) { XCTAssertEqual(got, want, accuracy: 1e-9) }
     }
 
-    // 탭 앱이 연결을 끊으면 FFmpeg가 종료된다. 오래 돈 뒤의 종료는 정상 재시작이다
+    func testRestartPolicyReportsOncePerStreak() {
+        var p = RestartPolicy()
+        XCTAssertEqual((0..<5).map { _ in p.onExit(runDuration: 0.5).reportError }, [false, false, true, false, false])
+    }
+
+    // 탭 앱이 연결을 끊으면 FFmpeg가 종료된다. 오래 돈 뒤의 종료는 바로 재시작한다
     func testRestartPolicyResetsAfterHealthyRun() {
         var p = RestartPolicy()
         _ = p.onExit(runDuration: 0.5); _ = p.onExit(runDuration: 0.5)
-        XCTAssertEqual(p.onExit(runDuration: 30), .restart)
-        XCTAssertEqual(p.onExit(runDuration: 0.5), .restart)
+        XCTAssertEqual(p.onExit(runDuration: 30).delay, 0.3, accuracy: 1e-9)
+        XCTAssertEqual(p.onExit(runDuration: 0.5).delay, 0.3, accuracy: 1e-9)
     }
 
     /// args 안 어딘가에 [flag, value]가 연속으로 있는지 확인한다.

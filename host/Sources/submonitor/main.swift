@@ -46,12 +46,19 @@ let videoSocket = tmp.appendingPathComponent("submonitor-video.sock").path
 let cursorSocket = tmp.appendingPathComponent("submonitor-cursor.sock").path
 killStaleFFmpeg(socketPath: videoSocket)
 
+// 화면 기록 권한은 FFmpeg 종료 패턴으로 추측하지 않고 시작할 때 확인한다(Review Focus 4)
+guard CGPreflightScreenCaptureAccess() else {
+    CGRequestScreenCaptureAccess()
+    print("오류: 화면 기록 권한이 없습니다.\n\(permissionHint)\n권한을 준 뒤 터미널을 다시 열고 실행하세요.")
+    exit(1)
+}
+
 do {
     let display = try VirtualDisplay(name: "Submonitor", pixelWidth: 2960, pixelHeight: 1848, refreshRate: 120)
     if let mode = CGDisplayCopyDisplayMode(display.displayID) {
         print("가상 디스플레이 \(display.displayID): \(describe(mode))")
     }
-    guard let device = waitForScreenDevice(display.displayID) else {
+    guard waitForScreenDevice(display.displayID) != nil else {
         print("오류: 가상 디스플레이가 활성 디스플레이 목록에 나타나지 않습니다")
         exit(1)
     }
@@ -59,12 +66,16 @@ do {
     let tracker = CursorTracker(displayID: display.displayID, server: try CursorServer(socketPath: cursorSocket))
     tracker.start()
 
+    let displayID = display.displayID
     let runner = FFmpegRunner(
-        arguments: ffmpegArguments(screenDevice: device, fps: options.fps, bitrate: options.bitrate, socketPath: videoSocket),
+        // 재시작할 때마다 화면 번호를 다시 구한다(메인 디스플레이 변경·모니터 연결로 순서가 바뀐다)
+        makeArguments: {
+            guard let device = screenDeviceName(for: displayID, activeDisplays: activeDisplays()) else { return nil }
+            return ffmpegArguments(screenDevice: device, fps: options.fps, bitrate: options.bitrate, socketPath: videoSocket)
+        },
         socketPath: videoSocket
     ) { tail in
-        print("오류: FFmpeg가 연달아 바로 종료되었습니다.\n\(tail)\n\(permissionHint)")
-        exit(1)
+        print("FFmpeg가 연달아 바로 종료됩니다. 계속 재시도합니다.\n\(tail)")
     }
     runner.start()
 

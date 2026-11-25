@@ -15,16 +15,24 @@ import android.widget.FrameLayout
 import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var root: FrameLayout
     private lateinit var surfaceView: SurfaceView
     private lateinit var cursorOverlay: CursorOverlay
-    @Volatile private var running = false
-    @Volatile private var videoSocket: LocalSocket? = null
-    private var videoThread: Thread? = null
-    @Volatile private var cursorSocket: LocalSocket? = null
-    private var cursorThread: Thread? = null
+    private var session: Session? = null
+
+    /**
+     * Surface 한 번의 수명. 스레드는 자기 세션의 플래그만 본다.
+     * 공용 플래그를 쓰면 join이 시간 초과된 옛 스레드가 다음 세션에서 되살아나 연결을 가로챘다.
+     */
+    private class Session {
+        val active = AtomicBoolean(true)
+        @Volatile var video: LocalSocket? = null
+        @Volatile var cursor: LocalSocket? = null
+        val threads = mutableListOf<Thread>()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -65,32 +73,31 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         holder.surface.setFrameRate(120f, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
-        running = true
-        videoThread = Thread({ videoLoop(holder.surface) }, "submonitor-video").apply { start() }
-        cursorThread = Thread({ cursorLoop() }, "submonitor-cursor").apply { start() }
+        val s = Session().also { session = it }
+        s.threads += Thread({ videoLoop(s, holder.surface) }, "submonitor-video").apply { start() }
+        s.threads += Thread({ cursorLoop(s) }, "submonitor-cursor").apply { start() }
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        running = false
-        videoSocket?.closeNow()
-        cursorSocket?.closeNow()
-        videoThread?.join(1000)
-        cursorThread?.join(1000)
-        videoThread = null
-        cursorThread = null
+        val s = session ?: return
+        session = null
+        s.active.set(false)
+        s.video?.closeNow()
+        s.cursor?.closeNow()
+        s.threads.forEach { it.join(1000) }
     }
 
     /** 연결 → 스트림 디코딩 → 끊기면 500ms 뒤 다시 연결. 화면이 사라지면(백그라운드 등) 끝난다. */
-    private fun videoLoop(surface: Surface) {
-        while (running) {
+    private fun videoLoop(s: Session, surface: Surface) {
+        while (s.active.get()) {
             var decoder: VideoDecoder? = null
             try {
-                connectAdb(VIDEO_SOCKET).use { s ->
-                    videoSocket = s
-                    val reader = FlvReader(BufferedInputStream(s.getInputStream(), 1 shl 16))
-                    while (running) {
+                connectAdb(VIDEO_SOCKET).use { sock ->
+                    s.video = sock
+                    val reader = FlvReader(BufferedInputStream(sock.inputStream, 1 shl 16))
+                    while (s.active.get()) {
                         when (val e = reader.next() ?: break) {
                             is FlvEvent.Config -> {
                                 decoder?.release()
@@ -107,18 +114,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             } finally {
                 decoder?.release()
             }
-            if (running) Thread.sleep(500)
+            if (s.active.get()) Thread.sleep(500)
         }
     }
 
     /** 커서 채널. 영상과 같은 수명·재접속 방식. 끊기면 커서를 숨긴다. */
-    private fun cursorLoop() {
-        while (running) {
+    private fun cursorLoop(s: Session) {
+        while (s.active.get()) {
             try {
-                connectAdb(CURSOR_SOCKET).use { s ->
-                    cursorSocket = s
-                    val input = DataInputStream(BufferedInputStream(s.inputStream))
-                    while (running) cursorOverlay.update(readCursorMsg(input) ?: break)
+                connectAdb(CURSOR_SOCKET).use { sock ->
+                    s.cursor = sock
+                    val input = DataInputStream(BufferedInputStream(sock.inputStream))
+                    while (s.active.get()) cursorOverlay.update(readCursorMsg(input) ?: break)
                 }
             } catch (e: IOException) {
                 Log.d(TAG, "cursor connection: ${e.message}")
@@ -126,7 +133,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 Log.w(TAG, "cursor stream error", e)
             }
             cursorOverlay.hide()
-            if (running) Thread.sleep(500)
+            if (s.active.get()) Thread.sleep(500)
         }
     }
 
