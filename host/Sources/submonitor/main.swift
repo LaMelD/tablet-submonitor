@@ -22,7 +22,29 @@ func waitForScreenDevice(_ id: CGDirectDisplayID) -> String? {
     return nil
 }
 
+/// 이전 실행이 비정상 종료되어 남은 FFmpeg를 정리한다.
+func killStaleFFmpeg(socketPath: String) {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+    p.arguments = ["-f", "unix:\(socketPath)"]
+    try? p.run()
+    p.waitUntilExit()
+}
+
 let permissionHint = "화면 기록 권한을 확인하세요: 시스템 설정 > 개인정보 보호 및 보안 > 화면 및 시스템 오디오 녹음에서 이 터미널 앱을 허용"
+
+let options: Options
+do {
+    options = try Options.parse(Array(CommandLine.arguments.dropFirst()))
+} catch {
+    print("오류: \(error)\n\(Options.usage)")
+    exit(2)
+}
+
+let tmp = FileManager.default.temporaryDirectory // 사용자 전용($TMPDIR, 0700)
+let videoSocket = tmp.appendingPathComponent("submonitor-video.sock").path
+let cursorSocket = tmp.appendingPathComponent("submonitor-cursor.sock").path
+killStaleFFmpeg(socketPath: videoSocket)
 
 do {
     let display = try VirtualDisplay(name: "Submonitor", pixelWidth: 2960, pixelHeight: 1848, refreshRate: 120)
@@ -33,9 +55,12 @@ do {
         print("오류: 가상 디스플레이가 활성 디스플레이 목록에 나타나지 않습니다")
         exit(1)
     }
-    let videoSocket = FileManager.default.temporaryDirectory.appendingPathComponent("submonitor-video.sock").path
+
+    let tracker = CursorTracker(displayID: display.displayID, server: try CursorServer(socketPath: cursorSocket))
+    tracker.start()
+
     let runner = FFmpegRunner(
-        arguments: ffmpegArguments(screenDevice: device, fps: 120, bitrate: "40M", socketPath: videoSocket),
+        arguments: ffmpegArguments(screenDevice: device, fps: options.fps, bitrate: options.bitrate, socketPath: videoSocket),
         socketPath: videoSocket
     ) { tail in
         print("오류: FFmpeg가 연달아 바로 종료되었습니다.\n\(tail)\n\(permissionHint)")
@@ -43,16 +68,15 @@ do {
     }
     runner.start()
 
-    let cursorSocket = FileManager.default.temporaryDirectory.appendingPathComponent("submonitor-cursor.sock").path
-    let tracker = CursorTracker(displayID: display.displayID, server: try CursorServer(socketPath: cursorSocket))
-    tracker.start()
-    print("영상 송출 대기: unix:\(videoSocket) (\(device))")
+    Thread { runDeviceLoop(videoSocket: videoSocket, cursorSocket: cursorSocket, apkPath: options.apkPath) }.start()
 
     let signals = [SIGINT, SIGTERM].map { sig -> DispatchSourceSignal in
         signal(sig, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
         source.setEventHandler {
+            print("종료 중…")
             runner.stop()
+            cleanupDevice()
             exit(0)
         }
         source.resume()
