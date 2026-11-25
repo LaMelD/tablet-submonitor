@@ -9,10 +9,12 @@ let package = Package(
             name: "CGVirtualDisplayPrivate",
             linkerSettings: [.linkedFramework("CoreGraphics")]
         ),
+        .target(name: "SubmonitorCore"),
         .executableTarget(
             name: "submonitor",
-            dependencies: ["CGVirtualDisplayPrivate"]
+            dependencies: ["CGVirtualDisplayPrivate", "SubmonitorCore"]
         ),
+        .testTarget(name: "SubmonitorCoreTests", dependencies: ["SubmonitorCore"]),
     ],
     swiftLanguageModes: [.v5]
 )
