@@ -13,21 +13,28 @@ import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.FrameLayout
 import java.io.BufferedInputStream
+import java.io.DataInputStream
 import java.io.IOException
 
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var root: FrameLayout
     private lateinit var surfaceView: SurfaceView
+    private lateinit var cursorOverlay: CursorOverlay
     @Volatile private var running = false
     @Volatile private var videoSocket: LocalSocket? = null
     private var videoThread: Thread? = null
+    @Volatile private var cursorSocket: LocalSocket? = null
+    private var cursorThread: Thread? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         root = FrameLayout(this)
         surfaceView = SurfaceView(this)
-        root.addView(surfaceView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        cursorOverlay = CursorOverlay(this)
+        val match = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        root.addView(surfaceView, match)
+        root.addView(cursorOverlay, FrameLayout.LayoutParams(match))
         setContentView(root)
         surfaceView.holder.addCallback(this)
         hideSystemBars()
@@ -60,6 +67,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         holder.surface.setFrameRate(120f, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
         running = true
         videoThread = Thread({ videoLoop(holder.surface) }, "submonitor-video").apply { start() }
+        cursorThread = Thread({ cursorLoop() }, "submonitor-cursor").apply { start() }
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
@@ -67,8 +75,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         running = false
         videoSocket?.closeNow()
+        cursorSocket?.closeNow()
         videoThread?.join(1000)
+        cursorThread?.join(1000)
         videoThread = null
+        cursorThread = null
     }
 
     /** 연결 → 스트림 디코딩 → 끊기면 500ms 뒤 다시 연결. 화면이 사라지면(백그라운드 등) 끝난다. */
@@ -100,6 +111,25 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
+    /** 커서 채널. 영상과 같은 수명·재접속 방식. 끊기면 커서를 숨긴다. */
+    private fun cursorLoop() {
+        while (running) {
+            try {
+                connectAdb(CURSOR_SOCKET).use { s ->
+                    cursorSocket = s
+                    val input = DataInputStream(BufferedInputStream(s.inputStream))
+                    while (running) cursorOverlay.update(readCursorMsg(input) ?: break)
+                }
+            } catch (e: IOException) {
+                Log.d(TAG, "cursor connection: ${e.message}")
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "cursor stream error", e)
+            }
+            cursorOverlay.hide()
+            if (running) Thread.sleep(500)
+        }
+    }
+
     /**
      * adb reverse가 만든 추상 네임스페이스 소켓에 접속한다. 상대가 adbd(shell uid)가 아니면 거부한다.
      * 탭의 다른 앱이 같은 이름을 먼저 차지해 조작된 데이터를 보내는 것을 막는다.
@@ -127,6 +157,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         const val TAG = "submonitor"
         const val ADBD_UID = 2000 // shell
         const val VIDEO_SOCKET = "submonitor-video"
+        const val CURSOR_SOCKET = "submonitor-cursor"
         const val VIDEO_WIDTH = 2960
         const val VIDEO_HEIGHT = 1848
     }

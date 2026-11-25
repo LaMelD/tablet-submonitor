@@ -3,6 +3,7 @@ import Foundation
 import SubmonitorCore
 
 setvbuf(stdout, nil, _IOLBF, 0)
+signal(SIGPIPE, SIG_IGN) // 탭 연결이 끊긴 소켓에 쓸 때 프로세스가 죽지 않게
 
 func activeDisplays() -> [UInt32] {
     var count: UInt32 = 0
@@ -41,6 +42,10 @@ do {
         exit(1)
     }
     runner.start()
+
+    let cursorSocket = FileManager.default.temporaryDirectory.appendingPathComponent("submonitor-cursor.sock").path
+    let tracker = CursorTracker(displayID: display.displayID, server: try CursorServer(socketPath: cursorSocket))
+    tracker.start()
     print("영상 송출 대기: unix:\(videoSocket) (\(device))")
 
     let signals = [SIGINT, SIGTERM].map { sig -> DispatchSourceSignal in
@@ -53,7 +58,7 @@ do {
         source.resume()
         return source
     }
-    withExtendedLifetime((display, signals)) { dispatchMain() }
+    withExtendedLifetime((display, signals, tracker)) { dispatchMain() }
 } catch {
     print("오류: \(error)")
     exit(1)
