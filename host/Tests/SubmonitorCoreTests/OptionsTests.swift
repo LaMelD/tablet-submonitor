@@ -10,6 +10,8 @@ final class OptionsTests: XCTestCase {
     func testParsesFlags() throws {
         let o = try Options.parse(["--fps", "60", "--bitrate", "30M", "--apk", "a.apk"])
         XCTAssertEqual(o.fps, 60); XCTAssertEqual(o.bitrate, "30M"); XCTAssertEqual(o.apkPath, "a.apk")
+        XCTAssertNil(o.serial)
+        XCTAssertEqual(try Options.parse(["--serial", "R54T502EJ0L"]).serial, "R54T502EJ0L")
     }
 
     func testRejectsUnknownFlagAndBadFps() {

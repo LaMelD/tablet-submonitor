@@ -14,12 +14,14 @@ public struct Options: Equatable {
     public var fps = 120
     public var bitrate = "40M"
     public var apkPath: String? = nil
+    /// 태블릿 adb 일련번호. 없으면 연결된 기기 중 태블릿을 고른다.
+    public var serial: String? = nil
 
     public init() {}
 
     public var bitsPerSecond: Int { parseBitrate(bitrate) ?? 40_000_000 }
 
-    public static let usage = "사용법: submonitor [--fps 120|60] [--bitrate 40M] [--apk <app-debug.apk>]"
+    public static let usage = "사용법: submonitor [--fps 120|60] [--bitrate 40M] [--apk <app-debug.apk>] [--serial <adb 일련번호>]"
 
     public static func parse(_ args: [String]) throws -> Options {
         var o = Options()
@@ -36,6 +38,9 @@ public struct Options: Equatable {
             case "--apk":
                 guard let v = value else { throw OptionsError.invalidValue(flag: flag) }
                 o.apkPath = v
+            case "--serial":
+                guard let v = value else { throw OptionsError.invalidValue(flag: flag) }
+                o.serial = v
             default:
                 throw OptionsError.unknownFlag(flag)
             }

@@ -62,7 +62,7 @@ do {
     screen.start()
     server.start()
 
-    Thread { runDeviceLoop(videoSocket: videoSocket, cursorSocket: cursorSocket, apkPath: options.apkPath) }.start()
+    Thread { runDeviceLoop(videoSocket: videoSocket, cursorSocket: cursorSocket, apkPath: options.apkPath, serial: options.serial) }.start()
 
     func shutdown(_ message: String) {
         print(message)
