@@ -18,10 +18,28 @@ class VideoDecoder(private val surface: Surface, private val width: Int, private
     private val queuedAt = ConcurrentHashMap<Long, Long>() // ptsUs -> 투입 시각(ns)
     private var codec: MediaCodec? = null
 
-    // 통계(디코더 스레드에서만 갱신)
-    private var statFrames = 0
-    private var statDecodeNs = 0L
-    private var statStartNs = 0L
+    /**
+     * 1초마다 한 줄로 남기는 통계. 버벅임이 어디서 생기는지 가른다.
+     * ptsGap = 맥에서 캡처한 시각 간격(캡처 쪽 끊김), arrivalGap = 탭에 도착한 간격(인코딩·전송 포함),
+     * late = 이 스트림에서 가장 빨리 온 프레임보다 늦게 온 정도(캡처 이후 밀린 시간),
+     * decode = 투입→출력 지연(탭 디코더), inputWait = 빈 입력 버퍼를 기다린 시간(디코더 밀림).
+     */
+    private val stats = Any()
+    private var winStartNs = System.nanoTime()
+    private var inFrames = 0
+    private var outFrames = 0
+    private var bytes = 0L
+    private var maxSize = 0
+    private var lastArrivalNs = 0L
+    private var lastPtsMs = -1L
+    private var maxArrivalGapNs = 0L
+    private var maxPtsGapMs = 0L
+    private var decodeNsSum = 0L
+    private var maxDecodeNs = 0L
+    private var maxInputWaitNs = 0L
+    private var minOffsetNs = Long.MAX_VALUE
+    private var maxLateNs = 0L
+    private var lateNsSum = 0L
 
     fun configure(csd: ByteArray) {
         val format = MediaFormat.createVideoFormat(MIME, width, height).apply {
@@ -70,7 +88,9 @@ class VideoDecoder(private val surface: Surface, private val width: Int, private
     @Throws(IOException::class)
     fun decode(frame: FlvEvent.Frame) {
         val c = codec ?: return
+        val arrived = System.nanoTime()
         val index = inputs.take()
+        onInput(frame, arrived, System.nanoTime() - arrived)
         val ptsUs = frame.ptsMs * 1000
         try {
             c.getInputBuffer(index)!!.apply { clear(); put(frame.data) }
@@ -90,17 +110,34 @@ class VideoDecoder(private val surface: Surface, private val width: Int, private
         thread.quitSafely()
     }
 
-    private fun record(decodeNs: Long) {
+    private fun onInput(frame: FlvEvent.Frame, arrivedNs: Long, waitNs: Long) = synchronized(stats) {
+        inFrames++
+        bytes += frame.data.size
+        maxSize = maxOf(maxSize, frame.data.size)
+        if (lastArrivalNs != 0L) maxArrivalGapNs = maxOf(maxArrivalGapNs, arrivedNs - lastArrivalNs)
+        if (lastPtsMs >= 0) maxPtsGapMs = maxOf(maxPtsGapMs, frame.ptsMs - lastPtsMs)
+        val offset = arrivedNs - frame.ptsMs * 1_000_000
+        minOffsetNs = minOf(minOffsetNs, offset)
+        maxLateNs = maxOf(maxLateNs, offset - minOffsetNs)
+        lateNsSum += offset - minOffsetNs
+        lastArrivalNs = arrivedNs
+        lastPtsMs = frame.ptsMs
+        maxInputWaitNs = maxOf(maxInputWaitNs, waitNs)
+    }
+
+    private fun record(decodeNs: Long) = synchronized(stats) {
+        outFrames++
+        decodeNsSum += decodeNs
+        maxDecodeNs = maxOf(maxDecodeNs, decodeNs)
         val now = System.nanoTime()
-        if (statFrames == 0) statStartNs = now
-        statFrames++
-        statDecodeNs += decodeNs
-        if (statFrames == 120) {
-            val fps = 119 * 1e9 / (now - statStartNs)
-            Log.i(TAG, "fps=%.1f decodeMs=%.1f".format(fps, statDecodeNs / 120 / 1e6))
-            statFrames = 0
-            statDecodeNs = 0
-        }
+        val winNs = now - winStartNs
+        if (winNs < 1_000_000_000L) return
+        Log.i(TAG, "stats win=%dms fps=%.1f in=%d Mbps=%.1f maxKB=%d ptsGapMax=%dms arrivalGapMax=%.1fms lateAvg=%.1fms lateMax=%.1fms decodeAvg=%.1fms decodeMax=%.1fms inputWaitMax=%.1fms".format(
+            winNs / 1_000_000, outFrames * 1e9 / winNs, inFrames, bytes * 8e3 / winNs, maxSize / 1024,
+            maxPtsGapMs, maxArrivalGapNs / 1e6, lateNsSum / maxOf(inFrames, 1) / 1e6, maxLateNs / 1e6, decodeNsSum / outFrames / 1e6, maxDecodeNs / 1e6, maxInputWaitNs / 1e6))
+        winStartNs = now
+        inFrames = 0; outFrames = 0; bytes = 0; maxSize = 0
+        maxArrivalGapNs = 0; maxPtsGapMs = 0; decodeNsSum = 0; maxDecodeNs = 0; maxInputWaitNs = 0; maxLateNs = 0; lateNsSum = 0
     }
 
     private companion object {
