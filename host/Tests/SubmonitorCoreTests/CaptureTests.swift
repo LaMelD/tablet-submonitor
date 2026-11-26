@@ -8,14 +8,16 @@ final class CaptureTests: XCTestCase {
     }
 
     func testFFmpegArgumentsPinLatencyCriticalOptions() {
-        let a = ffmpegArguments(screenDevice: "Capture screen 1", fps: 120, bitrate: "40M", socketPath: "/tmp/u/video.sock")
+        let a = ffmpegArguments(screenDevice: "Capture screen 1", fps: 120, bitrate: "40M")
         assertPair(a, "-f", "avfoundation"); assertPair(a, "-capture_cursor", "0")
         assertPair(a, "-framerate", "120"); assertPair(a, "-i", "Capture screen 1:none")
         assertPair(a, "-c:v", "hevc_videotoolbox"); assertPair(a, "-realtime", "1"); assertPair(a, "-bf", "0")
         assertPair(a, "-b:v", "40M"); assertPair(a, "-flush_packets", "1"); assertPair(a, "-f", "flv")
-        // 보안: 다른 프로세스가 화면을 받아가지 못하게 사용자 전용 디렉터리의 유닉스 소켓으로만 송출한다
-        assertPair(a, "-listen", "1")
-        XCTAssertEqual(a.last, "unix:/tmp/u/video.sock")
+        // 호스트가 연 사용자 전용 소켓이 표준 출력으로 연결된다. FFmpeg가 직접 포트나 소켓을 열지 않는다
+        XCTAssertEqual(a.last, "pipe:1")
+        XCTAssertFalse(a.contains("-listen"))
+        // 비정상 종료로 남은 FFmpeg를 다음 실행 때 찾아 끄기 위한 표식
+        assertPair(a, "-metadata", "comment=\(ffmpegMarker)")
     }
 
     // 리뷰 Important: 빠른 종료가 이어져도 호스트를 끝내지 않는다(탭 재접속이 잦을 때 권한 문제로 오인했다).

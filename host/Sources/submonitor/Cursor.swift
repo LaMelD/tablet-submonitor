@@ -3,14 +3,6 @@ import CoreGraphics
 import Foundation
 import SubmonitorCore
 
-enum CursorServerError: Error, CustomStringConvertible {
-    case socket(String)
-    var description: String {
-        if case let .socket(m) = self { return "커서 소켓 오류: \(m) (errno \(errno))" }
-        return ""
-    }
-}
-
 /// 사용자 전용 유닉스 소켓($TMPDIR)으로 커서 메시지를 보낸다. 클라이언트는 하나만, 새 연결이 오면 이전 연결을 닫는다.
 final class CursorServer {
     var onConnect: (() -> Void)?
@@ -19,19 +11,7 @@ final class CursorServer {
     private let queue = DispatchQueue(label: "submonitor.cursor")
 
     init(socketPath: String) throws {
-        unlink(socketPath)
-        listenFD = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard listenFD >= 0 else { throw CursorServerError.socket("socket") }
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = Array(socketPath.utf8)
-        guard pathBytes.count < MemoryLayout.size(ofValue: addr.sun_path) else { throw CursorServerError.socket("경로가 너무 김") }
-        withUnsafeMutableBytes(of: &addr.sun_path) { $0.copyBytes(from: pathBytes) }
-        let bound = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listenFD, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
-        }
-        guard bound == 0, listen(listenFD, 1) == 0 else { throw CursorServerError.socket("bind/listen") }
-        chmod(socketPath, 0o600)
+        listenFD = try listenUnixSocket(path: socketPath)
         Thread { [weak self] in self?.acceptLoop() }.start()
     }
 

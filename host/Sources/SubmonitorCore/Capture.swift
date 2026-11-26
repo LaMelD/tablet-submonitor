@@ -5,15 +5,19 @@ public func screenDeviceName(for displayID: UInt32, activeDisplays: [UInt32]) ->
     activeDisplays.firstIndex(of: displayID).map { "Capture screen \($0)" }
 }
 
-/// 송출은 사용자 전용 디렉터리($TMPDIR, 0700)의 유닉스 소켓으로만 한다. TCP로 열면 화면 기록 권한 없는 로컬 프로세스도 화면을 받아갈 수 있다.
-public func ffmpegArguments(screenDevice: String, fps: Int, bitrate: String, socketPath: String) -> [String] {
+/// 비정상 종료로 남은 FFmpeg를 다음 실행 때 찾아 끄기 위한 표식(FLV 메타데이터에 들어가고 탭은 무시한다)
+public let ffmpegMarker = "submonitor-video"
+
+/// 출력은 표준 출력(pipe:1). 호스트가 연 사용자 전용 유닉스 소켓이 그대로 표준 출력으로 연결된다(FFmpegRunner).
+public func ffmpegArguments(screenDevice: String, fps: Int, bitrate: String) -> [String] {
     [
         "-hide_banner", "-loglevel", "warning",
         "-f", "avfoundation", "-capture_cursor", "0", "-framerate", "\(fps)", "-pixel_format", "nv12",
         "-i", "\(screenDevice):none",
         "-c:v", "hevc_videotoolbox", "-realtime", "1", "-prio_speed", "1", "-bf", "0",
         "-g", "\(fps * 10)", "-b:v", bitrate,
-        "-flush_packets", "1", "-f", "flv", "-listen", "1", "unix:\(socketPath)",
+        "-metadata", "comment=\(ffmpegMarker)",
+        "-flush_packets", "1", "-f", "flv", "pipe:1",
     ]
 }
 
@@ -23,7 +27,7 @@ public struct RestartDecision: Equatable {
     public let reportError: Bool
 }
 
-/// 빠른 종료(minHealthyRun 미만)가 이어지면 재시작 간격을 두 배씩 늘린다(최대 maxDelay). 포기하지 않는다:
+/// 빠른 종료(minHealthyRun 미만)가 이어지면 다음 실행을 두 배씩 늦춘다(최대 maxDelay). 포기하지 않는다:
 /// 탭 재접속이 잦은 것도 빠른 종료로 보이기 때문이다. 화면 기록 권한은 시작할 때 따로 확인한다.
 public struct RestartPolicy {
     let minHealthyRun: TimeInterval

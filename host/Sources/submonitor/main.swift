@@ -22,11 +22,11 @@ func waitForScreenDevice(_ id: CGDirectDisplayID) -> String? {
     return nil
 }
 
-/// 이전 실행이 비정상 종료되어 남은 FFmpeg를 정리한다.
+/// 이전 실행이 비정상 종료되어 남은 FFmpeg를 정리한다(예전 버전은 소켓 경로, 지금은 표식으로 찾는다).
 func killStaleFFmpeg(socketPath: String) {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-    p.arguments = ["-f", "unix:\(socketPath)"]
+    p.arguments = ["-f", "^ffmpeg .*(unix:\(socketPath)|comment=\(ffmpegMarker))"]
     try? p.run()
     p.waitUntilExit()
 }
@@ -67,11 +67,11 @@ do {
     tracker.start()
 
     let displayID = display.displayID
-    let runner = FFmpegRunner(
+    let runner = try FFmpegRunner(
         // 재시작할 때마다 화면 번호를 다시 구한다(메인 디스플레이 변경·모니터 연결로 순서가 바뀐다)
         makeArguments: {
             guard let device = screenDeviceName(for: displayID, activeDisplays: activeDisplays()) else { return nil }
-            return ffmpegArguments(screenDevice: device, fps: options.fps, bitrate: options.bitrate, socketPath: videoSocket)
+            return ffmpegArguments(screenDevice: device, fps: options.fps, bitrate: options.bitrate)
         },
         socketPath: videoSocket
     ) { tail in
