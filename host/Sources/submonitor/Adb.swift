@@ -1,4 +1,5 @@
 import Foundation
+import SubmonitorCore
 
 struct AdbError: Error, CustomStringConvertible {
     let args: [String]
@@ -16,7 +17,8 @@ func adb(_ args: String...) throws -> String {
     p.standardOutput = pipe
     p.standardError = pipe
     p.standardInput = FileHandle.nullDevice
-    try p.run()
+    try ChildProcesses.shared.run(p)
+    defer { ChildProcesses.shared.finished(p) }
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
     p.waitUntilExit()
     let out = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -45,6 +47,7 @@ func runDeviceLoop(videoSocket: String, cursorSocket: String, apkPath: String?) 
             try adb("wait-for-disconnect")
             print("탭 연결이 끊어졌습니다")
         } catch {
+            if ChildProcesses.shared.terminating { return } // 종료하면서 끈 것
             print("오류: \(error)")
             Thread.sleep(forTimeInterval: 2)
         }
@@ -53,6 +56,7 @@ func runDeviceLoop(videoSocket: String, cursorSocket: String, apkPath: String?) 
 
 /// 종료 시 정리. 탭이 이미 빠졌을 수 있으므로 오류는 무시한다.
 func cleanupDevice() {
+    ChildProcesses.shared.terminateAll() // 기다리던 adb wait-for-*가 남지 않게
     _ = try? adb("reverse", "--remove", "localabstract:submonitor-video")
     _ = try? adb("reverse", "--remove", "localabstract:submonitor-cursor")
     _ = try? adb("shell", "am", "force-stop", tabletPackage)
