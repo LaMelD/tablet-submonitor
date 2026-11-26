@@ -16,5 +16,15 @@ final class OptionsTests: XCTestCase {
         XCTAssertThrowsError(try Options.parse(["--nope"]))
         XCTAssertThrowsError(try Options.parse(["--fps", "abc"]))
         XCTAssertThrowsError(try Options.parse(["--fps"])) // 값 없음
+        XCTAssertThrowsError(try Options.parse(["--bitrate", "fast"]))
+    }
+
+    func testBitrateUnits() {
+        XCTAssertEqual(parseBitrate("40M"), 40_000_000)
+        XCTAssertEqual(parseBitrate("500k"), 500_000)
+        XCTAssertEqual(parseBitrate("8000000"), 8_000_000)
+        XCTAssertNil(parseBitrate("0"))
+        XCTAssertNil(parseBitrate("M"))
+        XCTAssertEqual(Options().bitsPerSecond, 40_000_000)
     }
 }

@@ -14,21 +14,12 @@ func activeDisplays() -> [UInt32] {
 }
 
 /// 새 디스플레이가 활성 목록에 나타날 때까지 최대 3초 기다린다.
-func waitForScreenDevice(_ id: CGDirectDisplayID) -> String? {
+func waitUntilActive(_ id: CGDirectDisplayID) -> Bool {
     for _ in 0..<30 {
-        if let name = screenDeviceName(for: id, activeDisplays: activeDisplays()) { return name }
+        if activeDisplays().contains(id) { return true }
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
-    return nil
-}
-
-/// 이전 실행이 비정상 종료되어 남은 FFmpeg를 정리한다(예전 버전은 소켓 경로, 지금은 표식으로 찾는다).
-func killStaleFFmpeg(socketPath: String) {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-    p.arguments = ["-f", "^ffmpeg .*(unix:\(socketPath)|comment=\(ffmpegMarker))"]
-    try? p.run()
-    p.waitUntilExit()
+    return false
 }
 
 let permissionHint = "화면 기록 권한을 확인하세요: 시스템 설정 > 개인정보 보호 및 보안 > 화면 및 시스템 오디오 녹음에서 이 터미널 앱을 허용"
@@ -44,9 +35,8 @@ do {
 let tmp = FileManager.default.temporaryDirectory // 사용자 전용($TMPDIR, 0700)
 let videoSocket = tmp.appendingPathComponent("submonitor-video.sock").path
 let cursorSocket = tmp.appendingPathComponent("submonitor-cursor.sock").path
-killStaleFFmpeg(socketPath: videoSocket)
 
-// 화면 기록 권한은 FFmpeg 종료 패턴으로 추측하지 않고 시작할 때 확인한다(Review Focus 4)
+// 화면 기록 권한은 시작할 때 확인한다(Review Focus 4)
 guard CGPreflightScreenCaptureAccess() else {
     CGRequestScreenCaptureAccess()
     print("오류: 화면 기록 권한이 없습니다.\n\(permissionHint)\n권한을 준 뒤 터미널을 다시 열고 실행하세요.")
@@ -58,7 +48,7 @@ do {
     if let mode = CGDisplayCopyDisplayMode(display.displayID) {
         print("가상 디스플레이 \(display.displayID): \(describe(mode))")
     }
-    guard waitForScreenDevice(display.displayID) != nil else {
+    guard waitUntilActive(display.displayID) else {
         print("오류: 가상 디스플레이가 활성 디스플레이 목록에 나타나지 않습니다")
         exit(1)
     }
@@ -66,34 +56,31 @@ do {
     let tracker = CursorTracker(displayID: display.displayID, server: try CursorServer(socketPath: cursorSocket))
     tracker.start()
 
-    let displayID = display.displayID
-    let runner = try FFmpegRunner(
-        // 재시작할 때마다 화면 번호를 다시 구한다(메인 디스플레이 변경·모니터 연결로 순서가 바뀐다)
-        makeArguments: {
-            guard let device = screenDeviceName(for: displayID, activeDisplays: activeDisplays()) else { return nil }
-            return ffmpegArguments(screenDevice: device, fps: options.fps, bitrate: options.bitrate)
-        },
-        socketPath: videoSocket
-    ) { tail in
-        print("FFmpeg가 연달아 바로 종료됩니다. 계속 재시도합니다.\n\(tail)")
-    }
-    runner.start()
+    let server = try VideoServer(socketPath: videoSocket)
+    let screen = try ScreenStream(displayID: display.displayID, width: 2960, height: 1848, fps: options.fps,
+                                  bitsPerSecond: options.bitsPerSecond, server: server)
+    screen.start()
+    server.start()
 
     Thread { runDeviceLoop(videoSocket: videoSocket, cursorSocket: cursorSocket, apkPath: options.apkPath) }.start()
+
+    func shutdown(_ message: String) {
+        print(message)
+        screen.stop()
+        server.stop()
+        cleanupDevice()
+        exit(0)
+    }
+    screen.onUserStopped = { shutdown("메뉴 막대에서 화면 공유가 중지되어 종료합니다.") }
 
     let signals = [SIGINT, SIGTERM].map { sig -> DispatchSourceSignal in
         signal(sig, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-        source.setEventHandler {
-            print("종료 중…")
-            runner.stop()
-            cleanupDevice()
-            exit(0)
-        }
+        source.setEventHandler { shutdown("종료 중…") }
         source.resume()
         return source
     }
-    withExtendedLifetime((display, signals, tracker)) { dispatchMain() }
+    withExtendedLifetime((display, signals, tracker, screen, server)) { dispatchMain() }
 } catch {
     print("오류: \(error)")
     exit(1)
